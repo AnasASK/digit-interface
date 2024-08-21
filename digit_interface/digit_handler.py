@@ -34,17 +34,18 @@ class DigitHandler:
     def _parse(device_info: dict) -> dict:
         """
         Parses the device info and includes the serial number by querying the sysfs.
+        Sets dev_name to the first video device path from the paths list.
         """
         # We will assume the first path in the paths list is the main device path
         main_device_path = device_info["paths"][0] if device_info["paths"] else None
         serial_number = DigitHandler._get_serial_from_sysfs(main_device_path) if main_device_path else "Unknown"
         
         digit_info = {
-            "dev_name": device_info.get("name", "Unknown"),
+            "dev_name": main_device_path,  # Use the first available video device path as dev_name
             "paths": device_info.get("paths", []),
             "manufacturer": "Unknown",  # Could be retrieved with further sysfs parsing if needed
             "model": device_info.get("name", "Unknown"),
-            "revision": "Unknown",  # Could also be retrieved from sysfs in a similar manner
+            "revision": "2021",  # Could also be retrieved from sysfs in a similar manner
             "serial": serial_number
         }
         return digit_info
@@ -99,3 +100,18 @@ class DigitHandler:
                 return digit
         logger.error(f"No DIGIT with serial number {serial} found")
         return None
+
+
+# Example usage:
+if __name__ == "__main__":
+    digit_devices = DigitHandler.list_digits()
+    for device in digit_devices:
+        print(device)
+    
+    # Find a specific device by serial
+    serial_to_find = "123456789ABC"
+    found_device = DigitHandler.find_digit(serial_to_find)
+    if found_device:
+        print(f"Found device: {found_device}")
+    else:
+        print(f"No device with serial {serial_to_find} found")
