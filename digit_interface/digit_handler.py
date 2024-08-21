@@ -1,42 +1,97 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
-
-# This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
-
+import subprocess
+import os
 import logging
 from typing import Dict, List, Optional
-
-import pyudev
 
 logger = logging.getLogger(__name__)
 
 
 class DigitHandler:
+
     @staticmethod
-    def _parse(digit_dev: Dict[str, str]) -> Dict[str, str]:
+    def _get_serial_from_sysfs(device_path: str) -> str:
+        """
+        Tries to find the serial number for a given video device by tracing its parent
+        in the sysfs directory.
+        """
+        try:
+            # Resolve the sysfs path of the device
+            sysfs_path = os.path.realpath(f"/sys/class/video4linux/{os.path.basename(device_path)}/device")
+            
+            # Traverse up to find the USB device (if applicable)
+            while sysfs_path:
+                serial_path = os.path.join(sysfs_path, "serial")
+                if os.path.exists(serial_path):
+                    with open(serial_path, 'r') as serial_file:
+                        return serial_file.read().strip()
+                sysfs_path = os.path.dirname(sysfs_path)  # Move up one level
+        except Exception as e:
+            logger.error(f"Error retrieving serial number for {device_path}: {e}")
+        
+        return "Unknown"
+
+    @staticmethod
+    def _parse(device_info: dict) -> dict:
+        """
+        Parses the device info and includes the serial number by querying the sysfs.
+        """
+        # We will assume the first path in the paths list is the main device path
+        main_device_path = device_info["paths"][0] if device_info["paths"] else None
+        serial_number = DigitHandler._get_serial_from_sysfs(main_device_path) if main_device_path else "Unknown"
+        
         digit_info = {
-            "dev_name": digit_dev["DEVNAME"],
-            "manufacturer": digit_dev["ID_VENDOR"],
-            "model": digit_dev["ID_MODEL"],
-            "revision": digit_dev["ID_REVISION"],
-            "serial": digit_dev["ID_SERIAL_SHORT"],
+            "dev_name": device_info.get("name", "Unknown"),
+            "paths": device_info.get("paths", []),
+            "manufacturer": "Unknown",  # Could be retrieved with further sysfs parsing if needed
+            "model": device_info.get("name", "Unknown"),
+            "revision": "Unknown",  # Could also be retrieved from sysfs in a similar manner
+            "serial": serial_number
         }
         return digit_info
 
     @staticmethod
     def list_digits() -> List[Dict[str, str]]:
-        context = pyudev.Context()
-        logger.debug("Finding udev devices with subsystem=video4linux, id_model=DIGIT")
-        digits = context.list_devices(subsystem="video4linux", ID_MODEL="DIGIT")
-        logger.debug("Following udev devices found: ")
-        for device in digits:
-            logger.debug(device)
-        digits = [dict(DigitHandler._parse(_)) for _ in digits]
-        if not digits:
-            logger.debug("Could not find any udev devices matching parameters")
-        return digits
+        """
+        List video devices using v4l2-ctl and filter for devices with 'DIGIT' in the name.
+        """
+        try:
+            # Run the v4l2-ctl command to list video devices
+            result = subprocess.run(['v4l2-ctl', '--list-devices'], stdout=subprocess.PIPE, text=True, check=True)
+            output = result.stdout
+            
+            logger.debug("v4l2-ctl --list-devices output:\n" + output)
+
+            # Parse the output to find devices with 'DIGIT' in their name or model
+            devices = []
+            current_device = None
+            for line in output.splitlines():
+                if line.strip() == "":
+                    continue
+                if not line.startswith("\t"):  # Device name/model line
+                    current_device = {'name': line.strip(), 'paths': []}
+                    if 'DIGIT' in current_device['name']:
+                        devices.append(current_device)
+                else:  # Device path line (indented)
+                    if current_device and 'DIGIT' in current_device['name']:
+                        current_device['paths'].append(line.strip())
+
+            # Convert the devices to the format expected by the original code, including serial number
+            parsed_devices = [DigitHandler._parse(device) for device in devices]
+
+            if not parsed_devices:
+                logger.debug("Could not find any devices matching 'DIGIT'")
+                
+            return parsed_devices
+        
+        except subprocess.CalledProcessError as e:
+            logger.error(f"An error occurred while running v4l2-ctl: {e}")
+            return []
 
     @staticmethod
     def find_digit(serial: str) -> Optional[Dict[str, str]]:
+        """
+        Finds a specific DIGIT device by its serial number.
+        """
         digits = DigitHandler.list_digits()
         logger.debug(f"Searching for DIGIT with serial number {serial}")
         for digit in digits:
