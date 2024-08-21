@@ -1,17 +1,15 @@
-import subprocess
 import os
 import logging
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-
 class DigitHandler:
 
     @staticmethod
-    def _get_device_info_from_sysfs(device_path: str) -> dict:
+    def _get_device_info_from_sysfs(device_name: str) -> dict:
         """
-        Tries to find the model, manufacturer, revision, and serial number for a given video device
+        Retrieves the model, manufacturer, revision, and serial number for a given video device
         by querying the sysfs directory.
         """
         device_info = {
@@ -23,7 +21,7 @@ class DigitHandler:
 
         try:
             # Resolve the sysfs path of the device
-            sysfs_path = os.path.realpath(f"/sys/class/video4linux/{os.path.basename(device_path)}/device")
+            sysfs_path = os.path.realpath(f"/sys/class/video4linux/{device_name}/device")
 
             # Get Serial Number
             serial_path = os.path.join(sysfs_path, "../serial")
@@ -50,22 +48,19 @@ class DigitHandler:
                     device_info["revision"] = revision_file.read().strip()
 
         except Exception as e:
-            logger.error(f"Error retrieving device information for {device_path}: {e}")
+            logger.error(f"Error retrieving device information for {device_name}: {e}")
 
         return device_info
 
     @staticmethod
-    def _parse(device_info: dict) -> dict:
+    def _parse(device_name: str) -> dict:
         """
         Parses the device info and includes detailed information by querying the sysfs.
-        Sets dev_name to the first video device path from the paths list.
         """
-        main_device_path = device_info["paths"][0] if device_info["paths"] else None
-        sysfs_info = DigitHandler._get_device_info_from_sysfs(main_device_path) if main_device_path else {}
+        sysfs_info = DigitHandler._get_device_info_from_sysfs(device_name)
 
         digit_info = {
-            "dev_name": main_device_path,  # Use the first available video device path as dev_name
-            "paths": device_info.get("paths", []),
+            "dev_name": f"/dev/{device_name}",  # The video device path
             "manufacturer": sysfs_info.get("manufacturer", "Unknown"),
             "model": sysfs_info.get("model", "Unknown"),
             "revision": sysfs_info.get("revision", "Unknown"),
@@ -73,43 +68,29 @@ class DigitHandler:
         }
         return digit_info
 
-
     @staticmethod
     def list_digits() -> List[Dict[str, str]]:
         """
-        List video devices using v4l2-ctl and filter for devices with 'DIGIT' in the name.
+        Lists video devices by scanning the /dev directory and filtering for devices with 'DIGIT' in their name.
         """
-        try:
-            # Run the v4l2-ctl command to list video devices
-            result = subprocess.run(['v4l2-ctl', '--list-devices'], stdout=subprocess.PIPE, text=True, check=True)
-            output = result.stdout
-            
-            logger.debug("v4l2-ctl --list-devices output:\n" + output)
-
-            # Parse the output to find devices with 'DIGIT' in their name or model
-            devices = []
-            current_device = None
-            for line in output.splitlines():
-                if line.strip() == "":
-                    continue
-                if not line.startswith("\t"):  # Device name/model line
-                    current_device = {'name': line.strip(), 'paths': []}
-                    if 'DIGIT' in current_device['name']:
-                        devices.append(current_device)
-                else:  # Device path line (indented)
-                    if current_device and 'DIGIT' in current_device['name']:
-                        current_device['paths'].append(line.strip())
-
-            # Convert the devices to the format expected by the original code, including serial number
-            parsed_devices = [DigitHandler._parse(device) for device in devices]
-
-            if not parsed_devices:
-                logger.debug("Could not find any devices matching 'DIGIT'")
-                
-            return parsed_devices
+        video_devices_path = "/dev"
+        devices = []
         
-        except subprocess.CalledProcessError as e:
-            logger.error(f"An error occurred while running v4l2-ctl: {e}")
+        try:
+            # List all video devices from the /dev directory
+            for device_name in os.listdir(video_devices_path):
+                if device_name.startswith("video"):
+                    device_info = DigitHandler._parse(device_name)
+                    if 'DIGIT' in device_info['model']:
+                        devices.append(device_info)
+
+            if not devices:
+                logger.debug("Could not find any devices matching 'DIGIT'")
+
+            return devices
+
+        except Exception as e:
+            logger.error(f"An error occurred while listing video devices: {e}")
             return []
 
     @staticmethod
